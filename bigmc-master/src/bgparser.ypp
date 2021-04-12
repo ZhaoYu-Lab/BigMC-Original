@@ -1,0 +1,154 @@
+/*******************************************************************************
+*
+* Copyright (C) 2011 Gian Perrone (http://itu.dk/~gdpe)
+* 
+* BigMC - A bigraphical model checker (http://bigraph.org/bigmc).
+* 
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+* 
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+* 
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307,
+* USA.
+*********************************************************************************/
+%{
+#include <iostream>
+#include <fstream>
+#include <bigmc.h>
+#include <stdio.h>
+#include <string.h>
+
+void yyerror (const char *error);
+int  yylex ();
+
+char *numtostr(int i) {
+	char str[64];
+	sprintf(str,"num:%d",i);
+	return strdup(str);
+}
+
+%}
+
+%union {
+  parsenode *node;  /* For the expressions. Since it is a pointer, no problem. */
+  int       value;  /* For the lexical analyser. NUMBER tokens */
+  char      *ident;  /* For the lexical analyser. IDENT tokens */
+}
+
+%locations
+
+%token UNKNOWN
+%token SEMI ARROW PAR PREF COMMA LSQ RSQ LPAR RPAR
+%token INNER OUTER DPAR UNLINKED RULE IMPORT
+%token ACTIVE PASSIVE COLON HOLE IDENT NUM
+%token PROPERTY LAND LOR LNOT FORALL EXISTS NIL
+%token LEQ GEQ LT GT EQ NEQ DOLLAR BTRUE BFALSE IF THEN ELSE
+
+%type <node> model dec reaction exp expel property
+%type <node> prefix names propexp propatom proplist proplistel
+%type <value> NUM
+%type <ident> HOLE IDENT
+
+%start model
+
+%%
+
+model
+: dec SEMI model		{ /* @1; */ parser_add_result($1); $$ = NULL; }
+| dec SEMI			{ parser_add_result($1), $$ = $1 ; }
+| error SEMI			{ $$ = NULL; }
+| dec				{ parser_add_result($1); $$ = $1; }
+;
+
+dec
+: INNER IDENT			{ $$ = new interfacenode(new namenode($2),false); }
+| OUTER IDENT			{ $$ = new interfacenode(new namenode($2),true); }
+| ACTIVE IDENT COLON NUM	{ $$ = new signaturenode(new namenode($2),true,$4); }
+| PASSIVE IDENT COLON NUM	{ $$ = new signaturenode(new namenode($2),false,$4); }
+| PROPERTY IDENT property	{ $$ = new propertynode($2,$3); }
+| RULE IDENT reaction		{ ((reactionnode*)$3)->name = string(strdup($2)); $$ = $3; }
+| IMPORT IDENT			{ parser_import($2); }
+| reaction			{ $$ = $1; }
+| exp				{ $$ = $1; }
+;
+
+reaction			
+: exp ARROW exp			{ $$ = new reactionnode($1,$3); }
+;
+
+exp
+: expel LOR exp			{ $$ = new regionnode($1,$3); }
+| expel PAR exp			{ $$ = new parallelnode($1,$3); }
+| expel				{ $$ = $1; }
+;
+
+expel
+: prefix PREF expel		{ $$ = new prefixnode($1,$3); }
+| prefix			{ $$ = new prefixnode($1,NULL); }
+| DOLLAR NUM			{ $$ = new holenode($2); }
+| LPAR exp RPAR			{ $$ = $2; }
+| NIL				{ $$ = new nilnode(); }
+;
+
+prefix
+: IDENT LSQ names RSQ		{ $$ = new controlnode(new namenode($1), $3); }
+| IDENT				{ $$ = new controlnode(new namenode($1), NULL); }
+| NUM				{ $$ = new numnode($1); }
+;
+
+names
+: IDENT COMMA names		{ $$ = new seqnode(new namenode($1),$3); }
+| UNLINKED COMMA names		{ $$ = new seqnode(new namenode(""),$3); }
+| IDENT				{ $$ = new namenode($1); }
+| UNLINKED			{ $$ = new namenode(""); }
+;
+
+property
+: propexp LAND propexp		{ $$ = new binnode($1,OPR_AND,$3); }
+| propexp LOR propexp		{ $$ = new binnode($1,OPR_OR, $3); }
+| LNOT propexp			{ $$ = new notnode($2); }
+| IF property THEN property ELSE property
+				{ $$ = new ifnode($2,$4,$6); }
+| propexp			{ $$ = $1; }
+;
+
+propexp
+: propatom NEQ propatom		{ $$ = new binnode($1,OPR_NEQ,$3); } 
+| propatom EQ propatom		{ $$ = new binnode($1,OPR_EQ,$3); }
+| propatom LEQ propatom		{ $$ = new binnode($1,OPR_LEQ,$3); }
+| propatom GEQ propatom		{ $$ = new binnode($1,OPR_GEQ,$3); }
+| propatom LT propatom		{ $$ = new binnode($1,OPR_LT,$3); }
+| propatom GT propatom		{ $$ = new binnode($1,OPR_GT,$3); }
+| propatom			{ $$ = $1; }
+;
+
+propatom
+: LPAR property RPAR		{ $$ = $2; }
+| IDENT LPAR RPAR		{ $$ = new prednode($1,NULL); }
+| IDENT LPAR proplist RPAR	{ $$ = new prednode($1,$3); }
+| NUM				{ $$ = new numnode($1); }
+| DOLLAR IDENT			{ $$ = new namenode($2); }
+| DOLLAR IDENT ARROW propatom	{ $$ = new querynode($2,$4); }
+;
+
+proplist
+: proplistel COMMA proplist	{ $$ = new seqnode($1,$3); }
+| proplistel			{ $$ = $1; }
+;
+
+proplistel
+: NUM				{ $$ = new numnode($1); }
+| DOLLAR IDENT			{ $$ = new namenode($2); }
+| exp				{ $$ = $1; }
+;
+
+%%
+
